@@ -1,45 +1,49 @@
+import asyncio
+
 import discord
 from discord.ext import commands
-from discord import app_commands
 
-from asyncio import sleep
+import logging
 
-from config import get_config
+from config import config
 from scheduler import schedule
 
-config = get_config()
-intents = discord.Intents(messages=True, guilds=True, members=True, message_content=True)
+logger = logging.getLogger('discord')
+logger.setLevel(logging.WARNING)
+handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
+handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
+logger.addHandler(handler)
 
-cogs = [
-    'help',
-    'vac',
-    'unvac',
-    'vac_list',
-    'remind',
-    'remind_cancel',
-    'remind_list',
-    'ping',
-    'test',
-    'vk_add'
-]
+intents = discord.Intents.all()
 
-bot = commands.Bot(intents=intents, command_prefix='*')
-bot.remove_command('help')
+
+class MyBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix='&`',
+            intents=intents,
+            application_id=config.discord_bot.application_id,
+        )
+
+    async def setup_hook(self) -> None:
+        for cog in config.discord_bot.cogs:
+            await self.load_extension(f'Cogs.{cog}')
+        await self.tree.sync(guild=discord.Object(config.discord_bot.privileged_guild))
+
+
+async def main():
+    await bot.start(config.discord_bot.token)
+
+
+bot = MyBot()
 
 
 @bot.event
 async def on_ready():
-    await bot.change_presence(activity=discord.Game(name='... Нет, я не играю!\nЯ усердно работаю!'))
-    for cog in cogs:
-        await bot.load_extension(f'Cogs.{cog}')
-
-    print(bot.guilds[0])
-    await bot.tree.sync(guild=bot.guilds[0])
-
-
+    await bot.change_presence(activity=discord.Game(name='русскую рулетку!'))
     while True:
         await schedule(bot)
-        await sleep(30)
+        await asyncio.sleep(60)
 
 
-bot.run(config.discord_bot.token)
+asyncio.run(main())
