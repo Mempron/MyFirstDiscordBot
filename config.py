@@ -1,10 +1,6 @@
-import psycopg2
-import vkbottle
 from environs import Env
 
 from dataclasses import dataclass
-
-from texts import text
 
 
 @dataclass
@@ -34,17 +30,16 @@ class DataBase:
 
 @dataclass
 class Config:
-    discord_bot: DiscordBot
-    vk_bot: VKBot
-    data_base: DataBase
-    text: dict
+    dbot: DiscordBot
+    vbot: VKBot
+    db: DataBase
 
 
 env = Env()
 env.read_env()
 
 config = Config(
-    discord_bot=DiscordBot(
+    dbot=DiscordBot(
         token=env.str('DISCORD_BOT_TOKEN'),
         vac_role=env.int('DISCORD_BOT_VAC_ROLE'),
         vac_channel=env.int('DISCORD_BOT_VAC_CHANNEL'),
@@ -65,23 +60,14 @@ config = Config(
             'cancel_remind',
         ]
     ),
-    vk_bot=VKBot(
+    vbot=VKBot(
         token=env.str('VK_BOT_TOKEN')
     ),
-    data_base=DataBase(
+    db=DataBase(
         host=env.str('DATABASE_HOST'),
         port=env.str('DATABASE_PORT'),
         name=env.str('DATABASE_NAME'),
         user=env.str('DATABASE_USER'),
         password=env.str('DATABASE_PASSWORD')
     ),
-    text=text
 )
-database = psycopg2.connect(
-    host=config.data_base.host,
-    port=config.data_base.port,
-    database=config.data_base.name,
-    user=config.data_base.user,
-    password=config.data_base.password
-)
-api = vkbottle.API(config.vk_bot.token)

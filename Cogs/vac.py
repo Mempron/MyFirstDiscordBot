@@ -2,131 +2,100 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from discord.utils import get
+import psycopg2
 
 import typing
 from datetime import datetime, date
 
-from config import config, database, api
+from config import config
+from text import text
+from Utils.get_targets import get_targets
 
 
 class VacVKCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name='vac', description=config.text['vac_description'])
-    @app_commands.guilds(config.discord_bot.privileged_guild)
-    @app_commands.describe(target=config.text['vac_describe_target'],
-                           note=config.text['vac_describe_note'],
-                           vacation_period=config.text['vac_describe_date'])
-    @app_commands.checks.has_any_role(*config.discord_bot.privileged_roles)
-    async def vac(self, interaction: discord.Interaction, target: typing.Union[discord.Role, discord.Member],
-                  vacation_period: str,
-                  note: str = None):
+    @app_commands.command(name='vac', description=text['vac_description'])
+    @app_commands.guilds(config.dbot.privileged_guild)
+    @app_commands.describe(
+        targets=text['vac_describe_target'],
+        note=text['vac_describe_note'],
+        vacation_period=text['vac_describe_date']
+    )
+    @app_commands.checks.has_any_role(*config.dbot.privileged_roles)
+    async def vac(
+            self,
+            interaction: discord.Interaction,
+            targets: typing.Union[discord.Role, discord.Member],
+            vacation_period: str,
+            note: str = None
+    ):
         await interaction.response.defer()
 
-        targets = []
-        vacationers = []
-
-        if isinstance(target, discord.role.Role):
-            for member in target.members:
-                vacation = get(member.roles, id=config.discord_bot.vac_role)
-                if vacation:
-                    vacationers.append(member)
-            targets = list(set(target.members) - set(vacationers))
-        elif isinstance(target, discord.Member):
-            vacation = get(target.roles, id=config.discord_bot.vac_role)
-            if vacation:
-                vacationers.append(target)
-            else:
-                targets.append(target)
-
-        if vacationers:
-            ds_users_names = ', '.join([vacationer.mention for vacationer in vacationers])
-            embed = discord.Embed(
-                title=config.text['vac_embed_error_vac_already_title'],
-                description=config.text['vac_embed_vac_already_description'].format(
-                    ds_users_names=ds_users_names
-                ),
-                colour=discord.Colour.orange()
-            )
-            embed.set_image(url=config.text['vac_embed_vac_already_image'])
-
-            await interaction.followup.send(embed=embed)
+        targets = await get_targets(interaction, targets)
 
         if targets:
-            embed = discord.Embed(
-                title=config.text['vac_embed_error_vacation_period_title'],
-                description=config.text['vac_embed_error_vacation_period_description'].format(
-                    vacation_period=vacation_period
-                ),
-                colour=discord.Colour.red()
-            )
-            embed.set_image(url=config.text['vac_embed_error_vacation_period_image'])
             try:
                 if datetime.strptime(vacation_period, '%d.%m.%Y').date() < date.today():
-                    await interaction.followup.send(embed=embed)
-                    return
+                    raise ValueError
             except ValueError:
+                embed = discord.Embed(
+                    title=text['vac_embed_error_vacation_period_title'],
+                    description=text['vac_embed_error_vacation_period_description'].format(
+                        vacation_period=vacation_period
+                    ),
+                    colour=discord.Colour.red()
+                )
+                embed.set_image(url=config.text['vac_embed_error_vacation_period_image'])
                 await interaction.followup.send(embed=embed)
                 return
 
             ds_users_names = ', '.join([ds_user.mention for ds_user in targets])
-            new_note = None
+
+            format_note = None
             if note is None:
-                new_note = ''
+                format_note = ''
             else:
-                new_note = f'\nПо причине:\n{note}'
+                format_note = f'\nПо причине:\n{note}'
 
             embed = discord.Embed(
-                title=config.text['vac_embed_title'],
-                description=config.text['vac_embed_description'].format(
+                title=text['vac_embed_title'],
+                description=text['vac_embed_description'].format(
                     ds_users_names=ds_users_names,
                     vacation_period=vacation_period,
-                    note=new_note
+                    note=format_note
                 ),
                 colour=discord.Colour.blurple()
             )
-            embed.set_image(url=config.text['vac_embed_image'])
+            embed.set_image(url=text['vac_embed_image'])
             await interaction.followup.send(embed=embed, content=ds_users_names)
 
-            cursor = database.cursor()
-            guild = self.bot.get_guild(config.discord_bot.privileged_guild)
-            vac_role = get(guild.roles, id=config.discord_bot.vac_role)
-            for target in targets:
-                await target.add_roles(vac_role)
-                cursor.execute(f'INSERT INTO "Tasks" (ds_id, func_name, note, start_time, complete_status) VALUES '
-                               f'({target.id}, \'unvac\', \'{note}\', \'{vacation_period}\', False)')
-                database.commit()
+            guild = self.bot.get_guild(config.dbot.privileged_guild)
+            vacation_role = get(guild.roles, id=config.dbot.vac_role)
 
-    @vac.error
-    async def vac_error(self, interaction: discord.Interaction, error):
-        print(error)
-        print(type(error))
-        print(error.original)
-        print(type(error.original))
-        if isinstance(error, discord.app_commands.errors.MissingAnyRole):
-            embed = discord.Embed(
-                title=config.text['embed_error_missing_any_role_title'],
-                description=config.text['embed_error_missing_any_role_description'].format(
-                    ds_user_name=interaction.user.name),
-                colour=discord.Colour.red()
+            data_base_connection = psycopg2.connect(
+                host=config.db.host,
+                port=config.db.port,
+                database=config.db.name,
+                user=config.db.user,
+                password=config.db.password
             )
-            embed.set_image(url=config.text['embed_error_missing_any_role_image'])
-            await interaction.followup.send(embed=embed)
-            return
+            data_base_cursor = data_base_connection.cursor()
 
-        error_text = f'{type(error)}\n{error}'
-        if error.original:
-            error_text += f'\n{type(error.original)}\n{error.original}'
+            vacation_period = datetime.strptime(vacation_period, '%d.%m.%Y')
+            for target in targets:
+                await target.add_roles(vacation_role)
+                data_base_cursor.execute(
+                    f'INSERT INTO "Tasks" '
+                    f'(ds_id, func_name, note, start_time, complete_status, source) '
+                    f'VALUES '
+                    f'({target.id}, \'vac\', \'{note}\', \'{vacation_period}\', False, {config.dbot.vac_channel})')
+                data_base_connection.commit()
 
-        embed = discord.Embed(
-            title=config.text['unknown_error_embed_title'],
-            description=config.text['unknown_error_embed_description'].format(error=error_text),
-            colour=discord.Colour.red()
-        )
-        embed.set_image(url=config.text['unknown_error_embed_image'])
-        await interaction.followup.send(embed=embed)
+            data_base_cursor.close()
+            data_base_connection.close()
 
 
 async def setup(bot):
-    await bot.add_cog(VacVKCog(bot), guilds=[discord.Object(id=config.discord_bot.privileged_guild)])
+    await bot.add_cog(VacVKCog(bot), guilds=[discord.Object(id=config.dbot.privileged_guild)])

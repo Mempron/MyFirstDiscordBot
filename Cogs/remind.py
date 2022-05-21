@@ -1,27 +1,29 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.utils import get
 from discord.app_commands import Choice
+import psycopg2
 
 import typing
 import datetime
 
-from config import config, database
+from config import config
+from text import text
+from Utils.get_targets import get_targets
 
 
 class RemindCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name='remind', description=config.text['remind_description'])
-    @app_commands.guilds(config.discord_bot.privileged_guild)
-    @app_commands.checks.has_any_role(*config.discord_bot.privileged_roles)
+    @app_commands.command(name='remind', description=text['remind_description'])
+    @app_commands.guilds(config.dbot.privileged_guild)
+    @app_commands.checks.has_any_role(*config.dbot.privileged_roles)
     @app_commands.describe(
-        target=config.text['remind_describe_target'],
-        repeat=config.text['remind_describe_repeat'],
-        raw_time_delta=config.text['remind_describe_next_time'],
-        note=config.text['remind_describe_note']
+        target=text['remind_describe_target'],
+        repeat=text['remind_describe_repeat'],
+        raw_time_delta=text['remind_describe_next_time'],
+        note=text['remind_describe_note']
     )
     @app_commands.choices(repeat=[
         Choice(name='один раз', value=0),
@@ -37,33 +39,7 @@ class RemindCog(commands.Cog):
 
         await interaction.response.defer()
 
-        targets = []
-        vacationers = []
-
-        if isinstance(target, discord.role.Role):
-            for member in target.members:
-                vacation = get(member.roles, id=config.discord_bot.vac_role)
-                if vacation:
-                    vacationers.append(member)
-            targets = list(set(target.members) - set(vacationers))
-        elif isinstance(target, discord.Member):
-            vacation = get(target.roles, id=config.discord_bot.vac_role)
-            if vacation:
-                vacationers.append(target)
-            else:
-                targets.append(target)
-
-        if vacationers:
-            ds_users_names = ', '.join([vacationer.name for vacationer in vacationers])
-
-            embed = discord.Embed(
-                title=config.text['vacation_error_embed_title'],
-                description=config.text['vacation_error_embed_description'].format(ds_users_names=ds_users_names),
-                colour=discord.Colour.red()
-            )
-            embed.set_image(url=config.text['vacation_error_embed_image'])
-
-            await interaction.followup.send(embed=embed)
+        targets = await get_targets(interaction, target)
 
         if targets:
 
@@ -86,8 +62,8 @@ class RemindCog(commands.Cog):
             next_time = now + timedelta
 
             embed = discord.Embed(
-                title=config.text['remind_embed_title'],
-                description=config.text['remind_embed_description'].format(
+                title=text['remind_embed_title'],
+                description=text['remind_embed_description'].format(
                     repeat=repeat.name,
                     ds_users_names=', '.join([target.mention for target in targets]),
                     raw_time_delta=' '.join(raw_time_delta),
@@ -96,67 +72,48 @@ class RemindCog(commands.Cog):
                 ),
                 colour=discord.Colour.blue()
             )
-            embed.set_image(url=config.text['remind_embed_title_image'])
+            embed.set_image(url=text['remind_embed_title_image'])
             await interaction.followup.send(embed=embed)
 
-            cursor = database.cursor()
+            data_base_connection = psycopg2.connect(
+                host=config.db.host,
+                port=config.db.port,
+                database=config.db.name,
+                user=config.db.user,
+                password=config.db.password
+            )
+            data_base_cursor = data_base_connection.cursor()
 
             for target in targets:
-                cursor.execute(f'INSERT INTO "Tasks" (ds_id, func_name, func_args, start_time, complete_status, note, '
-                               f'source) VALUES ({target.id}, \'remind{str(repeat.value)}\', '
-                               f'\'{timedelta}\', \'{next_time}\', False, \'{note}\', '
-                               f'\'{interaction.channel_id}\')')
-                database.commit()
+                data_base_cursor.execute(
+                    f'INSERT INTO "Tasks" '
+                    f'(ds_id, func_name, func_args, start_time, complete_status, note, source) '
+                    f'VALUES '
+                    f'({target.id}, '
+                    f'\'remind{str(repeat.value)}\', '
+                    f'\'{timedelta}\', '
+                    f'\'{next_time}\', '
+                    f'False, '
+                    f'\'{note}\', '
+                    f'\'{interaction.channel_id}\')')
+                data_base_connection.commit()
+
+            data_base_cursor.close()
+            data_base_connection.close()
 
     @remind.error
     async def remind_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, discord.app_commands.errors.MissingAnyRole):
-            embed = discord.Embed(
-                title=config.text['embed_error_missing_any_role_title'],
-                description=config.text['embed_error_missing_any_role_description'].format(
-                    ds_user_name=interaction.user.name),
-                colour=discord.Colour.red()
-            )
-            embed.set_image(url=config.text['embed_error_missing_any_role_image'])
-            await interaction.followup.send(embed=embed)
-            return
-
-        elif isinstance(error, app_commands.errors.CommandInvokeError):
+        if isinstance(error, app_commands.errors.CommandInvokeError):
             if isinstance(error.original, ValueError):
                 embed = discord.Embed(
-                    title=config.text['remind_embed_error_value_title'],
-                    description=config.text['remind_embed_error_value_description'].format(
+                    title=text['remind_embed_error_value_title'],
+                    description=text['remind_embed_error_value_description'].format(
                         raw_time_delta=interaction.namespace.raw_time_delta),
                     colour=discord.Colour.red()
                 )
-                embed.set_image(url=config.text['remind_embed_error_value_title_image'])
+                embed.set_image(url=text['remind_embed_error_value_title_image'])
                 await interaction.followup.send(embed=embed)
-                return
-
-        error_text = f'{type(error)}\n{error}'
-        if error.original:
-            error_text += f'\n{type(error.original)}\n{error.original}'
-
-        embed = discord.Embed(
-            title=config.text['unknown_error_embed_title'],
-            description=config.text['unknown_error_embed_description'].format(error=error_text),
-            colour=discord.Colour.red()
-        )
-        embed.set_image(url=config.text['unknown_error_embed_image'])
-        await interaction.followup.send(embed=embed)
-
-        print('Хьюстон, у нас проблема!')
-        print(f'{interaction.user.name} натворил делов!')
-
-        print('---------------------')
-        print(f'Type of Error: {type(error)}')
-        print(f'Error: {error}')
-        if error.original:
-            print('---------------------')
-            print('Which contains another error:')
-            print(f'Type of Error: {type(error.original)}')
-            print(f'Error: {error.original}')
 
 
 async def setup(bot):
-    await bot.add_cog(RemindCog(bot), guilds=[discord.Object(id=config.discord_bot.privileged_guild)])
+    await bot.add_cog(RemindCog(bot), guilds=[discord.Object(id=config.dbot.privileged_guild)])
